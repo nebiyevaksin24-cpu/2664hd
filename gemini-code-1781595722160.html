@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Doktor AI - İnkişaf Etmiş Səs Paneli</title>
+    <style>
+        body { background: #0f172a; color: white; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif; margin: 0; padding: 20px; box-sizing: border-box; }
+        #status { font-size: 22px; margin-bottom: 40px; color: #38bdf8; text-align: center; font-weight: bold; min-height: 30px; }
+        
+        .key-container { margin-bottom: 25px; text-align: center; width: 100%; max-width: 350px; }
+        input { width: 100%; padding: 14px; border-radius: 8px; border: 1px solid #334155; background: #1e293b; color: white; font-size: 14px; text-align: center; box-sizing: border-box; }
+        
+        .mic-btn { 
+            width: 100px; 
+            height: 100px; 
+            border-radius: 50%; 
+            background: #2563eb; 
+            border: none; 
+            cursor: pointer; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            box-shadow: 0 10px 20px rgba(37, 99, 235, 0.4); 
+            transition: all 0.3s ease; 
+        }
+        .mic-btn:active { transform: scale(0.95); }
+        
+        .mic-btn.recording { 
+            background: #ef4444; 
+            box-shadow: 0 0 25px #ef4444; 
+            animation: pulse 1.5s infinite; 
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        .mic-icon { width: 40px; height: 40px; fill: white; }
+        
+        /* Vizual Diaqnostika jurnalı */
+        #debugLog { width: 100%; max-width: 450px; margin-top: 40px; padding: 15px; background: #1e293b; border-radius: 8px; border-left: 5px solid #38bdf8; font-family: monospace; font-size: 13px; color: #94a3b8; word-break: break-all; max-height: 150px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+
+    <div class="key-container" id="keyBox">
+        <p style="margin-bottom: 10px; color: #94a3b8;">Yeni ChatGPT API Açarınızı daxil edin:</p>
+        <input type="text" id="apiKeyInput" placeholder="sk-proj-...">
+    </div>
+
+    <div id="status">Sistemi başlatmaq üçün mikrofon düyməsinə basın</div>
+    
+    <button class="mic-btn" id="micBtn">
+        <svg class="mic-icon" viewBox="0 0 24 24">
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.42 2.72 6.23 6 6.72V21h2v-3.28c3.28-.49 6-3.3 6-6.72h-1.7z"/>
+        </svg>
+    </button>
+    
+    <div id="debugLog">Sistem Diaqnostikası: Aktivdir.</div>
+
+    <script>
+        const statusText = document.getElementById('status');
+        const micBtn = document.getElementById('micBtn');
+        const debugLog = document.getElementById('debugLog');
+        const apiKeyInput = document.getElementById('apiKeyInput');
+        const keyBox = document.getElementById('keyBox');
+
+        if (localStorage.getItem('saved_openai_key')) {
+            apiKeyInput.value = localStorage.getItem('saved_openai_key');
+        }
+
+        // İnkişaf etmiş jurnallama funksiyası
+        function logStatus(msg, type = "info") {
+            const colors = {
+                info: { border: "#38bdf8", text: "#94a3b8", prefix: "[Sistem]" },
+                success: { border: "#10b981", text: "#34d399", prefix: "[Uğurlu]" },
+                error: { border: "#ef4444", text: "#f87171", prefix: "[XƏTA]" }
+            };
+            const current = colors[type] || colors.info;
+            
+            debugLog.innerText = `${current.prefix} ${msg}`;
+            debugLog.style.borderLeftColor = current.border;
+            debugLog.style.color = current.text;
+        }
+
+        // Brauzer dəstəyini yoxla
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            logStatus("Brauzer səs tanıma xüsusiyyətini dəstəkləmir! Zəhmət olmasa mobil Chrome istifadə edin.", "error");
+        }
+
+        let recognition = null;
+        if (SpeechRecognition) {
+            recognition = new SpeechRecognition();
+            recognition.lang = 'az-AZ'; 
+            recognition.continuous = true; 
+            recognition.interimResults = false;
+        }
+
+        let isRecording = false;
+        let finalTranscript = "";
+
+        // Düyməni sıfırlama funksiyası (Xəta baş verdikdə qırmızı qalmamaq üçün)
+        function resetMicButton() {
+            isRecording = false;
+            micBtn.classList.remove('recording');
+        }
+
+        micBtn.onclick = () => {
+            if (!recognition) {
+                logStatus("Səs tanıma sistemi mövcud deyil. Səhifəni dəstəklənən brauzerdə açın.", "error");
+                return;
+            }
+
+            const currentKey = apiKeyInput.value.trim();
+            if (!currentKey) {
+                logStatus("Zəhmət olmasa, OpenAI panelindən aldığınız aktiv API açarını daxil edin!", "error");
+                return;
+            }
+
+            localStorage.setItem('saved_openai_key', currentKey);
+            keyBox.style.display = 'none';
+
+            if (!isRecording) {
+                // SƏS YAZMANI BAŞLAT
+                try {
+                    isRecording = true;
+                    finalTranscript = "";
+                    micBtn.classList.add('recording');
+                    statusText.innerText = "Sizi dinləyirəm... Danışın və bitəndə yenidən düyməyə basın.";
+                    logStatus("Mikrofon açıldı, səs gözlənilir...", "info");
+                    recognition.start();
+                } catch (err) {
+                    resetMicButton();
+                    logStatus("Mikrofon başladılarkən xəta: " + err.message, "error");
+                }
+            } else {
+                // SƏS YAZMANI DAYANDIR VƏ GÖNDƏR
+                statusText.innerText = "Səs emal olunur...";
+                recognition.stop(); 
+            }
+        };
+
+        if (recognition) {
+            recognition.onresult = (event) => {
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i][0].transcript + " ";
+                    }
+                }
+            };
+
+            recognition.onend = () => {
+                resetMicButton(); // Düyməni avtomatik göy rəngə qaytar
+                
+                if (!finalTranscript.trim()) {
+                    statusText.innerText = "Heç bir səs qeydə alınmadı.";
+                    logStatus("Boş səs qeydə alındı. Göndərilmə rədd edildi.", "info");
+                    return;
+                }
+                
+                sendToOpenAI(finalTranscript.trim());
+            };
+
+            // Ətraflı Mikrofon Xətası Analizi
+            recognition.onerror = (e) => {
+                resetMicButton();
+                const errorMessages = {
+                    'not-allowed': "Mikrofon icazəsi rədd edilib! Brauzer ayarlarından mikrofonu aktiv edin.",
+                    'no-speech': "Heç bir səs eşidilmədi. Zəhmət olmasa yenidən yoxlayın.",
+                    'network': "Şəbəkə xətası! İnternet bağlantınızı yoxlayın.",
+                    'aborted': "Dinləmə sessiyası yarıda kəsildi."
+                };
+                const msg = errorMessages[e.error] || `Səs tanıma xətası: ${e.error}`;
+                logStatus(msg, "error");
+                statusText.innerText = "Mikrofon xətası baş verdi.";
+            };
+        }
+
+        async function sendToOpenAI(text) {
+            statusText.innerText = "Doktor AI düşünür...";
+            logStatus(`Mətn OpenAI-a ötürülür: "${text}"`, "info");
+
+            const apiKey = localStorage.getItem('saved_openai_key');
+
+            try {
+                const response = await fetch("https://api.openai.com/v1/chat/completions", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model: "gpt-4o-mini", 
+                        messages: [
+                            { role: "system", content: "Sən arıqlama mütəxəssisi Doktor AI-san. Azərbaycan dilində maksimum 2 qısa cümlə ilə cavab ver." },
+                            { role: "user", content: text }
+                        ]
+                    })
+                });
+
+                // Əgər HTTP status xətası varsa (məsələn, 401, 429)
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    const apiErrorMsg = errorData.error?.message || `HTTP xətası! Status: ${response.status}`;
+                    
+                    if (response.status === 401) {
+                        keyBox.style.display = 'block';
+                        throw new Error("API Açarınız səhvdir və ya OpenAI tərəfindən silinib!");
+                    } else if (response.status === 429) {
+                        throw new Error("OpenAI balansı bitib və ya limitsiz sorğu xətası (Rate Limit) yarandı!");
+                    } else {
+                        throw new Error(apiErrorMsg);
+                    }
+                }
+
+                const data = await response.json();
+                const aiReply = data.choices[0].message.content;
+                logStatus("Cavab uğurla alındı, səs formatına çevrilir...", "success");
+                speakText(aiReply);
+
+            } catch (error) {
+                logStatus(error.message, "error");
+                statusText.innerText = "Cavab alınarkən xəta oldu.";
+            }
+        }
+
+        function speakText(text) {
+            statusText.innerText = "Doktor AI danışır...";
+            
+            // Əgər brauzerdə əvvəlki səslər qalıbsa, hamısını təmizlə ki, üst-üstə düşməsin
+            window.speechSynthesis.cancel();
+
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'az-AZ'; 
+
+            utterance.onend = () => {
+                statusText.innerText = "Növbəti söhbət üçün düyməyə basın.";
+                logStatus("Söhbət tamamlandı. Yeni əmr üçün hazırdır.", "success");
+            };
+
+            utterance.onerror = (e) => {
+                logStatus("Səsli oxuma (TTS) xətası: " + e.error, "error");
+                statusText.innerText = "Səs oxunmasında problem oldu.";
+            };
+
+            window.speechSynthesis.speak(utterance);
+        }
+    </script>
+</body>
+</html>
